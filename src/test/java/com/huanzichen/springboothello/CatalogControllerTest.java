@@ -28,6 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 public class CatalogControllerTest {
 
     private static final String PRODUCT_DETAIL_KEY_PREFIX = "product:detail:";
+    private static final String HOT_PRODUCT_KEY = "product:hot:5";
 
     @Autowired
     private MockMvc mockMvc;
@@ -47,6 +48,7 @@ public class CatalogControllerTest {
             jdbcTemplate.update("delete from products where id = ?", productId);
             stringRedisTemplate.delete(PRODUCT_DETAIL_KEY_PREFIX + productId);
         }
+        stringRedisTemplate.delete(HOT_PRODUCT_KEY);
         for (Long categoryId : categoryIds) {
             jdbcTemplate.update("delete from categories where id = ?", categoryId);
         }
@@ -195,16 +197,108 @@ public class CatalogControllerTest {
     }
 
     @Test
+    void shouldCacheHotProductsAfterFirstRead() throws Exception {
+        long suffix = System.currentTimeMillis();
+        Long categoryId = insertCategory("hot-category-" + suffix, 1);
+
+        Long product1Id = insertProduct(categoryId, "hot-product-1-" + suffix, new BigDecimal("11.10"), "ON_SALE");
+        Long product2Id = insertProduct(categoryId, "hot-product-2-" + suffix, new BigDecimal("22.20"), "ON_SALE");
+        Long product3Id = insertProduct(categoryId, "hot-product-3-" + suffix, new BigDecimal("33.30"), "ON_SALE");
+        insertProduct(categoryId, "hot-product-off-sale-" + suffix, new BigDecimal("44.40"), "OFF_SALE");
+        Long product4Id = insertProduct(categoryId, "hot-product-4-" + suffix, new BigDecimal("55.50"), "ON_SALE");
+        Long product5Id = insertProduct(categoryId, "hot-product-5-" + suffix, new BigDecimal("66.60"), "ON_SALE");
+        Long product6Id = insertProduct(categoryId, "hot-product-6-" + suffix, new BigDecimal("77.70"), "ON_SALE");
+
+        setProductCreatedAt(product1Id, "2030-01-01 10:01:00");
+        setProductCreatedAt(product2Id, "2030-01-01 10:02:00");
+        setProductCreatedAt(product3Id, "2030-01-01 10:03:00");
+        setProductCreatedAt(product4Id, "2030-01-01 10:04:00");
+        setProductCreatedAt(product5Id, "2030-01-01 10:05:00");
+        setProductCreatedAt(product6Id, "2030-01-01 10:06:00");
+
+        mockMvc.perform(get("/products/hot"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.length()").value(5))
+                .andExpect(jsonPath("$.data[0].name").value("hot-product-6-" + suffix))
+                .andExpect(jsonPath("$.data[4].name").value("hot-product-2-" + suffix));
+
+        String cachedJson = stringRedisTemplate.opsForValue().get(HOT_PRODUCT_KEY);
+        assertTrue(cachedJson != null && cachedJson.contains("hot-product-6-" + suffix), "hot products should be written to redis");
+        assertTrue(!cachedJson.contains("hot-product-off-sale-" + suffix), "off sale products should not appear in hot product cache");
+    }
+
+    @Test
+    void shouldReturnHotProductsFromCacheWhenRedisIsPopulated() throws Exception {
+        long suffix = System.currentTimeMillis();
+        Long categoryId = insertCategory("cached-hot-category-" + suffix, 1);
+        Long product1Id = insertProduct(categoryId, "cached-hot-product-1-" + suffix, new BigDecimal("88.80"), "ON_SALE");
+        Long product2Id = insertProduct(categoryId, "cached-hot-product-2-" + suffix, new BigDecimal("99.90"), "ON_SALE");
+
+        setProductCreatedAt(product1Id, "2031-01-01 09:01:00");
+        setProductCreatedAt(product2Id, "2031-01-01 09:02:00");
+
+        mockMvc.perform(get("/products/hot"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data[0].name").value("cached-hot-product-2-" + suffix))
+                .andExpect(jsonPath("$.data[0].categoryName").value("cached-hot-category-" + suffix))
+                .andExpect(jsonPath("$.data[1].name").value("cached-hot-product-1-" + suffix));
+
+        jdbcTemplate.update("delete from products where id = ?", product1Id);
+        jdbcTemplate.update("delete from products where id = ?", product2Id);
+
+        mockMvc.perform(get("/products/hot"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data[0].name").value("cached-hot-product-2-" + suffix))
+                .andExpect(jsonPath("$.data[1].name").value("cached-hot-product-1-" + suffix));
+    }
+
+    @Test
+    void shouldFallbackToDatabaseWhenCachedHotProductsJsonIsInvalid() throws Exception {
+        long suffix = System.currentTimeMillis();
+        Long categoryId = insertCategory("hot-fallback-category-" + suffix, 1);
+
+        Long product1Id = insertProduct(categoryId, "hot-fallback-product-1-" + suffix, new BigDecimal("18.80"), "ON_SALE");
+        Long product2Id = insertProduct(categoryId, "hot-fallback-product-2-" + suffix, new BigDecimal("28.80"), "ON_SALE");
+
+        setProductCreatedAt(product1Id, "2032-01-01 08:01:00");
+        setProductCreatedAt(product2Id, "2032-01-01 08:02:00");
+
+        stringRedisTemplate.opsForValue().set(HOT_PRODUCT_KEY, "{invalid-json}");
+
+        mockMvc.perform(get("/products/hot"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data[0].name").value("hot-fallback-product-2-" + suffix))
+                .andExpect(jsonPath("$.data[1].name").value("hot-fallback-product-1-" + suffix));
+
+        String cachedJson = stringRedisTemplate.opsForValue().get(HOT_PRODUCT_KEY);
+        assertTrue(cachedJson != null && cachedJson.contains("hot-fallback-product-2-" + suffix), "invalid hot product cache should be replaced by database result");
+    }
+
+    @Test
     void shouldUpdateProductAndClearDetailCache() throws Exception {
         long suffix = System.currentTimeMillis();
         Long oldCategoryId = insertCategory("update-old-category-" + suffix, 1);
         Long newCategoryId = insertCategory("update-new-category-" + suffix, 2);
         Long productId = insertProduct(oldCategoryId, "update-old-product-" + suffix, new BigDecimal("33.30"), "ON_SALE");
+        Long otherHotProductId = insertProduct(newCategoryId, "update-other-hot-product-" + suffix, new BigDecimal("66.60"), "ON_SALE");
+
+        setProductCreatedAt(productId, "2033-01-01 07:01:00");
+        setProductCreatedAt(otherHotProductId, "2033-01-01 07:02:00");
 
         stringRedisTemplate.opsForValue().set(
                 PRODUCT_DETAIL_KEY_PREFIX + productId,
                 """
                 {"id":%d,"categoryId":%d,"categoryName":"stale-category","name":"stale-product","description":"stale description","price":11.1,"stock":99,"status":"ON_SALE","coverUrl":"https://example.com/stale.jpg"}
+                """.formatted(productId, oldCategoryId)
+        );
+        stringRedisTemplate.opsForValue().set(
+                HOT_PRODUCT_KEY,
+                """
+                [{"id":%d,"categoryId":%d,"categoryName":"stale-hot-category","name":"stale-hot-product","description":"stale hot description","price":22.2,"stock":10,"status":"ON_SALE","coverUrl":"https://example.com/stale-hot.jpg"}]
                 """.formatted(productId, oldCategoryId)
         );
 
@@ -234,6 +328,8 @@ public class CatalogControllerTest {
 
         String cachedAfterUpdate = stringRedisTemplate.opsForValue().get(PRODUCT_DETAIL_KEY_PREFIX + productId);
         org.junit.jupiter.api.Assertions.assertNull(cachedAfterUpdate, "product detail cache should be deleted after update");
+        String hotCachedAfterUpdate = stringRedisTemplate.opsForValue().get(HOT_PRODUCT_KEY);
+        org.junit.jupiter.api.Assertions.assertNull(hotCachedAfterUpdate, "hot product cache should be deleted after update");
 
         mockMvc.perform(get("/products/" + productId))
                 .andExpect(status().isOk())
@@ -247,6 +343,28 @@ public class CatalogControllerTest {
 
         String rebuiltCache = stringRedisTemplate.opsForValue().get(PRODUCT_DETAIL_KEY_PREFIX + productId);
         assertTrue(rebuiltCache != null && rebuiltCache.contains("update-new-product-" + suffix), "product detail cache should be rebuilt with updated data");
+
+        String hotResponse = mockMvc.perform(get("/products/hot"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data[0].name").value("update-other-hot-product-" + suffix))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertTrue(!hotResponse.contains("update-new-product-" + suffix), "off sale updated product should not appear in hot products");
+
+        String rebuiltHotCache = stringRedisTemplate.opsForValue().get(HOT_PRODUCT_KEY);
+        assertTrue(rebuiltHotCache != null && rebuiltHotCache.contains("update-other-hot-product-" + suffix), "hot product cache should be rebuilt with fresh data");
+    }
+
+    private void setProductCreatedAt(Long productId, String createdAt) {
+        jdbcTemplate.update(
+                "update products set created_at = ?, updated_at = ? where id = ?",
+                createdAt,
+                createdAt,
+                productId
+        );
     }
 
     @Test

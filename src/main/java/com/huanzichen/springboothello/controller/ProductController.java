@@ -9,6 +9,8 @@ import com.huanzichen.springboothello.service.ProductService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 public class ProductController {
 
@@ -25,6 +27,11 @@ public class ProductController {
     @GetMapping("/products/{id:\\d+}")
     public Result<Product> getProductById(@PathVariable Long id) {
         return Result.success(productService.getProductById(id));
+    }
+
+    @GetMapping("/products/hot")
+    public Result<List<Product>> listHotProducts() {
+        return Result.success(productService.listHotProducts());
     }
 
     @PutMapping("/products/{id:\\d+}")

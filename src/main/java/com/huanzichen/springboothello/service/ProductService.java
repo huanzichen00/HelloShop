@@ -20,6 +20,9 @@ public class ProductService {
 
     private static final String PRODUCT_DETAIL_KEY_PREFIX = "product:detail:";
     private static final Duration PRODUCT_DETAIL_TTL = Duration.ofMinutes(30);
+    private static final String HOT_PRODUCT_KEY = "product:hot:5";
+    private static final Duration HOT_PRODUCT_TTL = Duration.ofMinutes(10);
+    private static final int HOT_PRODUCT_LIMIT = 5;
 
     private final ProductMapper productMapper;
     private final StringRedisTemplate stringRedisTemplate;
@@ -82,6 +85,26 @@ public class ProductService {
         return product;
     }
 
+    public List<Product> listHotProducts() {
+        String cachedJson = stringRedisTemplate.opsForValue().get(HOT_PRODUCT_KEY);
+        if (cachedJson != null && !cachedJson.isBlank()) {
+            try {
+                return objectMapper.readValue(cachedJson,
+                        objectMapper.getTypeFactory().constructCollectionType(List.class, Product.class));
+            } catch(JsonProcessingException e) {
+                stringRedisTemplate.delete(HOT_PRODUCT_KEY);
+            }
+        }
+
+        List<Product> products = productMapper.findHotProducts(HOT_PRODUCT_LIMIT);
+        try {
+            String json = objectMapper.writeValueAsString(products);
+            stringRedisTemplate .opsForValue().set(HOT_PRODUCT_KEY, json, HOT_PRODUCT_TTL);
+        } catch(JsonProcessingException e) {
+        }
+        return products;
+    }
+
     public Product updateProduct(Long id, ProductUpdateDTO productUpdateDTO) {
         Product existed = productMapper.findById(id);
         if (existed == null) {
@@ -104,6 +127,8 @@ public class ProductService {
         }
 
         stringRedisTemplate.delete(PRODUCT_DETAIL_KEY_PREFIX + id);
+        stringRedisTemplate.delete(HOT_PRODUCT_KEY);
+
         return productMapper.findById(id);
     }
 

@@ -23,6 +23,26 @@
             where p.id = #{id}
     </select>
 
+    <select id="findHotProducts"
+            resultType="com.huanzichen.springboothello.model.Product">
+        select p.id,
+               p.category_id as categoryId,
+               c.name as categoryName,
+               p.name,
+               p.description,
+               p.price,
+               p.stock,
+               p.status,
+               p.cover_url as coverUrl,
+               p.created_at as createdAt,
+               p.updated_at as updatedAt
+        from products p
+        left join categories c on p.category_id = c.id
+        where p.status = 'ON_SALE'
+        order by p.created_at desc, p.id desc
+        limit #{limit}
+    </select>
+
     <select id="searchWithConditionsAndPage"
             resultType="com.huanzichen.springboothello.model.Product">
         select p.id,

@@ -11,6 +11,8 @@ public interface ProductMapper {
 
     Product findById(Long id);
 
+    List<Product> findHotProducts(@Param("limit") Integer limit);
+
     int deductStock(@Param("id") Long id, @Param("quantity") Integer quantity);
 
     List<Product> searchWithConditionsAndPage(@Param("categoryId") Long categoryId,
