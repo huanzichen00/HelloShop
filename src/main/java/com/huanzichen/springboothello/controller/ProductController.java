@@ -6,6 +6,7 @@ import com.huanzichen.springboothello.dto.product.ProductQueryDTO;
 import com.huanzichen.springboothello.dto.product.ProductUpdateDTO;
 import com.huanzichen.springboothello.model.Product;
 import com.huanzichen.springboothello.service.ProductService;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -27,7 +28,7 @@ public class ProductController {
     }
 
     @PutMapping("/products/{id:\\d+}")
-    public Result<Product> updateProductById(@PathVariable Long id, @RequestBody ProductUpdateDTO productUpdateDTO) {
+    public Result<Product> updateProductById(@PathVariable Long id, @RequestBody @Valid ProductUpdateDTO productUpdateDTO) {
         return Result.success(productService.updateProduct(id, productUpdateDTO));
     }
 }

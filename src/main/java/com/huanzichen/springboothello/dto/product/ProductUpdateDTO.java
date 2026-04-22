@@ -13,7 +13,7 @@ public class ProductUpdateDTO {
     @NotNull(message = "categoryId cannot be null")
     private Long categoryId;
 
-    @NotBlank(message = "name cannot ge blank")
+    @NotBlank(message = "name cannot be blank")
     private String name;
 
     private String description;
@@ -23,10 +23,10 @@ public class ProductUpdateDTO {
     private BigDecimal price;
 
     @NotNull(message = "stock cannot be null")
-    @Min(value = 0, message = "stock cannot be a negative")
+    @Min(value = 0, message = "stock cannot be negative")
     private Integer stock;
 
-    @NotBlank(message = "status cannnot be blank")
+    @NotBlank(message = "status cannot be blank")
     private String status;
 
     private String coverUrl;
