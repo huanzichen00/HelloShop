@@ -12,10 +12,12 @@ import com.huanzichen.springboothello.model.CartItem;
 import com.huanzichen.springboothello.model.Order;
 import com.huanzichen.springboothello.model.OrderItem;
 import com.huanzichen.springboothello.model.Product;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -24,72 +26,88 @@ import java.util.UUID;
 
 @Service
 public class OrderService {
+    private static final String ORDER_SUBMIT_KEY_PREFIX = "order:submit:";
+    private static final Duration ORDER_SUBMIT_TTL = Duration.ofMinutes(5);
+
     private final CartItemMapper cartItemMapper;
     private final OrderMapper orderMapper;
     private final ProductMapper productMapper;
     private final OrderItemMapper orderItemMapper;
+    private final StringRedisTemplate stringRedisTemplate;
 
-    public OrderService(CartItemMapper cartItemMapper, OrderMapper orderMapper, ProductMapper productMapper, OrderItemMapper orderItemMapper) {
+    public OrderService(CartItemMapper cartItemMapper, OrderMapper orderMapper, ProductMapper productMapper, OrderItemMapper orderItemMapper, StringRedisTemplate stringRedisTemplate) {
         this.cartItemMapper = cartItemMapper;
         this.orderMapper = orderMapper;
         this.productMapper = productMapper;
         this.orderItemMapper = orderItemMapper;
+        this.stringRedisTemplate = stringRedisTemplate;
     }
 
     @Transactional
     public Order createOrder(OrderCreateDTO orderCreateDTO) {
         Long userId = UserContext.getCurrentUserId();
+        String submitKey = ORDER_SUBMIT_KEY_PREFIX + userId;
 
-        List<CartItem> cartItems = getOwnedCartItems(userId, orderCreateDTO.getCartItemIds());
+        Boolean locked = stringRedisTemplate.opsForValue()
+                .setIfAbsent(submitKey, "1", ORDER_SUBMIT_TTL);
 
-        BigDecimal totalAmount = BigDecimal.ZERO;
-        int totalQuantity = 0;
-        List<OrderItem> orderItems = new ArrayList<>();
+        if (!Boolean.TRUE.equals(locked)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "please do not submit repeatedly");
+        }
+        try {
+            List<CartItem> cartItems = getOwnedCartItems(userId, orderCreateDTO.getCartItemIds());
 
-        for (CartItem cartItem : cartItems) {
-            Product product = getAvailableProduct(cartItem.getProductId());
+            BigDecimal totalAmount = BigDecimal.ZERO;
+            int totalQuantity = 0;
+            List<OrderItem> orderItems = new ArrayList<>();
 
-            if (product.getStock() < cartItem.getQuantity()) {
-                throw new BusinessException(ErrorCode.BAD_REQUEST, "insufficient stock");
+            for (CartItem cartItem : cartItems) {
+                Product product = getAvailableProduct(cartItem.getProductId());
+
+                if (product.getStock() < cartItem.getQuantity()) {
+                    throw new BusinessException(ErrorCode.BAD_REQUEST, "insufficient stock");
+                }
+
+                BigDecimal subtotalAmount = product.getPrice()
+                        .multiply(BigDecimal.valueOf(cartItem.getQuantity()));
+
+                OrderItem orderItem = new OrderItem();
+                orderItem.setProductId(product.getId());
+                orderItem.setProductName(product.getName());
+                orderItem.setProductPrice(product.getPrice());
+                orderItem.setProductCoverUrl(product.getCoverUrl());
+                orderItem.setQuantity(cartItem.getQuantity());
+                orderItem.setSubtotalAmount(subtotalAmount);
+
+                orderItems.add(orderItem);
+
+                totalAmount = totalAmount.add(subtotalAmount);
+                totalQuantity += cartItem.getQuantity();
             }
 
-            BigDecimal subtotalAmount = product.getPrice()
-                    .multiply(BigDecimal.valueOf(cartItem.getQuantity()));
+            Order order = new Order();
+            order.setUserId(userId);
+            order.setOrderNo(generateOrderNo());
+            order.setStatus("PENDING_PAYMENT");
+            order.setTotalAmount(totalAmount);
+            order.setTotalQuantity(totalQuantity);
 
-            OrderItem orderItem = new OrderItem();
-            orderItem.setProductId(product.getId());
-            orderItem.setProductName(product.getName());
-            orderItem.setProductPrice(product.getPrice());
-            orderItem.setProductCoverUrl(product.getCoverUrl());
-            orderItem.setQuantity(cartItem.getQuantity());
-            orderItem.setSubtotalAmount(subtotalAmount);
+            orderMapper.insert(order);
 
-            orderItems.add(orderItem);
+            for (OrderItem orderItem : orderItems) {
+                orderItem.setOrderId(order.getId());
+                orderItemMapper.insert(orderItem);
+            }
 
-            totalAmount = totalAmount.add(subtotalAmount);
-            totalQuantity += cartItem.getQuantity();
+            deductStock(cartItems);
+            removeCartItems(orderCreateDTO.getCartItemIds());
+
+            Order createdOrder = orderMapper.findById(order.getId());
+            createdOrder.setItems(orderItemMapper.findByOrderId(order.getId()));
+            return createdOrder;
+        } finally {
+            stringRedisTemplate.delete(submitKey);
         }
-
-        Order order = new Order();
-        order.setUserId(userId);
-        order.setOrderNo(generateOrderNo());
-        order.setStatus("PENDING_PAYMENT");
-        order.setTotalAmount(totalAmount);
-        order.setTotalQuantity(totalQuantity);
-
-        orderMapper.insert(order);
-
-        for (OrderItem orderItem : orderItems) {
-            orderItem.setOrderId(order.getId());
-            orderItemMapper.insert(orderItem);
-        }
-
-        deductStock(cartItems);
-        removeCartItems(orderCreateDTO.getCartItemIds());
-
-        Order createdOrder = orderMapper.findById(order.getId());
-        createdOrder.setItems(orderItemMapper.findByOrderId(order.getId()));
-        return createdOrder;
     }
 
     public List<Order> listMyOrders() {

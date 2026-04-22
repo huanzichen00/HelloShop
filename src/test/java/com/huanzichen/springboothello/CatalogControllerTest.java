@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
@@ -25,11 +26,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 public class CatalogControllerTest {
 
+    private static final String PRODUCT_DETAIL_KEY_PREFIX = "product:detail:";
+
     @Autowired
     private MockMvc mockMvc;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
 
     private final List<Long> productIds = new ArrayList<>();
     private final List<Long> categoryIds = new ArrayList<>();
@@ -38,6 +44,7 @@ public class CatalogControllerTest {
     void cleanup() {
         for (Long productId : productIds) {
             jdbcTemplate.update("delete from products where id = ?", productId);
+            stringRedisTemplate.delete(PRODUCT_DETAIL_KEY_PREFIX + productId);
         }
         for (Long categoryId : categoryIds) {
             jdbcTemplate.update("delete from categories where id = ?", categoryId);
@@ -126,6 +133,64 @@ public class CatalogControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(404))
                 .andExpect(jsonPath("$.message").value("product not found"));
+    }
+
+    @Test
+    void shouldCacheProductDetailAfterFirstRead() throws Exception {
+        long suffix = System.currentTimeMillis();
+        Long categoryId = insertCategory("cache-category-" + suffix, 1);
+        Long productId = insertProduct(categoryId, "cache-product-" + suffix, new BigDecimal("66.60"), "ON_SALE");
+
+        mockMvc.perform(get("/products/" + productId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.id").value(productId))
+                .andExpect(jsonPath("$.data.name").value("cache-product-" + suffix));
+
+        String cachedJson = stringRedisTemplate.opsForValue().get(PRODUCT_DETAIL_KEY_PREFIX + productId);
+        assertTrue(cachedJson != null && cachedJson.contains("cache-product-" + suffix), "product detail should be written to redis");
+    }
+
+    @Test
+    void shouldReturnProductDetailFromCacheWhenRedisIsPopulated() throws Exception {
+        long suffix = System.currentTimeMillis();
+        Long categoryId = insertCategory("cache-hit-category-" + suffix, 1);
+        Long productId = insertProduct(categoryId, "db-product-" + suffix, new BigDecimal("77.70"), "ON_SALE");
+
+        stringRedisTemplate.opsForValue().set(
+                PRODUCT_DETAIL_KEY_PREFIX + productId,
+                """
+                {"id":%d,"categoryId":%d,"categoryName":"cached-category-%d","name":"cached-product-%d","description":"cached description","price":88.8,"stock":99,"status":"ON_SALE","coverUrl":"https://example.com/cached.jpg"}
+                """.formatted(productId, categoryId, suffix, suffix)
+        );
+
+        mockMvc.perform(get("/products/" + productId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.id").value(productId))
+                .andExpect(jsonPath("$.data.name").value("cached-product-" + suffix))
+                .andExpect(jsonPath("$.data.categoryName").value("cached-category-" + suffix))
+                .andExpect(jsonPath("$.data.price").value(88.8));
+    }
+
+    @Test
+    void shouldFallbackToDatabaseWhenCachedProductJsonIsInvalid() throws Exception {
+        long suffix = System.currentTimeMillis();
+        Long categoryId = insertCategory("cache-fallback-category-" + suffix, 1);
+        Long productId = insertProduct(categoryId, "fallback-product-" + suffix, new BigDecimal("55.50"), "ON_SALE");
+
+        stringRedisTemplate.opsForValue().set(PRODUCT_DETAIL_KEY_PREFIX + productId, "{invalid-json}");
+
+        mockMvc.perform(get("/products/" + productId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.id").value(productId))
+                .andExpect(jsonPath("$.data.name").value("fallback-product-" + suffix))
+                .andExpect(jsonPath("$.data.categoryName").value("cache-fallback-category-" + suffix))
+                .andExpect(jsonPath("$.data.price").value(55.5));
+
+        String cachedJson = stringRedisTemplate.opsForValue().get(PRODUCT_DETAIL_KEY_PREFIX + productId);
+        assertTrue(cachedJson != null && cachedJson.contains("fallback-product-" + suffix), "invalid cache should be replaced by database result");
     }
 
     private Long insertCategory(String name, int sort) {

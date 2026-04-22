@@ -1,22 +1,33 @@
 package com.huanzichen.springboothello.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huanzichen.springboothello.common.ErrorCode;
 import com.huanzichen.springboothello.common.PageResult;
 import com.huanzichen.springboothello.dto.product.ProductQueryDTO;
 import com.huanzichen.springboothello.exception.BusinessException;
 import com.huanzichen.springboothello.mapper.ProductMapper;
 import com.huanzichen.springboothello.model.Product;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.List;
 
 @Service
 public class ProductService {
 
-    private final ProductMapper productMapper;
+    private static final String PRODUCT_DETAIL_KEY_PREFIX = "product:detail:";
+    private static final Duration PRODUCT_DETAIL_TTL = Duration.ofMinutes(30);
 
-    public ProductService(ProductMapper productMapper) {
+    private final ProductMapper productMapper;
+    private final StringRedisTemplate stringRedisTemplate;
+    private final ObjectMapper objectMapper;
+
+    public ProductService(ProductMapper productMapper, StringRedisTemplate stringRedisTemplate, ObjectMapper objectMapper) {
         this.productMapper = productMapper;
+        this.stringRedisTemplate = stringRedisTemplate;
+        this.objectMapper = objectMapper;
     }
 
     public PageResult<Product> searchProductsByPage(ProductQueryDTO queryDTO) {
@@ -46,9 +57,26 @@ public class ProductService {
     }
 
     public Product getProductById(Long id) {
+        String cacheKey = PRODUCT_DETAIL_KEY_PREFIX + id;
+
+        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
+        if (cachedJson != null && !cachedJson.isBlank()) {
+            try {
+                return objectMapper.readValue(cachedJson, Product.class);
+            } catch(JsonProcessingException e) {
+                stringRedisTemplate.delete(cacheKey);
+            }
+        }
+
         Product product = productMapper.findById(id);
         if (product == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "product not found");
+        }
+
+        try {
+            String json = objectMapper.writeValueAsString(product);
+            stringRedisTemplate.opsForValue().set(cacheKey, json, PRODUCT_DETAIL_TTL);
+        } catch (JsonProcessingException e) {
         }
         return product;
     }

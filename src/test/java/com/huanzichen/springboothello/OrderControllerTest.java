@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -30,6 +31,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 public class OrderControllerTest {
 
+    private static final String ORDER_SUBMIT_KEY_PREFIX = "order:submit:";
+
     @Autowired
     private MockMvc mockMvc;
 
@@ -38,6 +41,9 @@ public class OrderControllerTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
 
     private final List<Long> orderItemIds = new ArrayList<>();
     private final List<Long> orderIds = new ArrayList<>();
@@ -65,6 +71,7 @@ public class OrderControllerTest {
         }
         for (Long userId : userIds) {
             jdbcTemplate.update("delete from users where id = ?", userId);
+            stringRedisTemplate.delete(ORDER_SUBMIT_KEY_PREFIX + userId);
         }
 
         orderItemIds.clear();
@@ -158,6 +165,38 @@ public class OrderControllerTest {
         org.junit.jupiter.api.Assertions.assertEquals(18, firstStock);
         org.junit.jupiter.api.Assertions.assertEquals(19, secondStock);
         org.junit.jupiter.api.Assertions.assertEquals(0, cartCount);
+    }
+
+    @Test
+    void shouldReturn400WhenSubmittingOrderRepeatedly() throws Exception {
+        long suffix = System.currentTimeMillis();
+        String username = "order_repeat_user_" + suffix;
+        String token = registerAndLogin(username);
+        Long userId = findUserIdByUsername(username);
+
+        Long categoryId = insertCategory("repeat-category-" + suffix, 1);
+        Long productId = insertProduct(categoryId, "repeat-product-" + suffix, new BigDecimal("12.00"), 10, "ON_SALE");
+        Long cartItemId = insertCartItem(userId, productId, 1, true);
+
+        stringRedisTemplate.opsForValue().set(ORDER_SUBMIT_KEY_PREFIX + userId, "1");
+
+        mockMvc.perform(withToken(post("/orders"), token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "cartItemIds": [%d]
+                                }
+                                """.formatted(cartItemId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("please do not submit repeatedly"));
+
+        Integer orderCount = jdbcTemplate.queryForObject(
+                "select count(*) from orders where user_id = ?",
+                Integer.class,
+                userId
+        );
+        org.junit.jupiter.api.Assertions.assertEquals(0, orderCount);
     }
 
     @Test
