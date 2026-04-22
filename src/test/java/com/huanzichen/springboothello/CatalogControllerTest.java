@@ -19,6 +19,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -191,6 +192,81 @@ public class CatalogControllerTest {
 
         String cachedJson = stringRedisTemplate.opsForValue().get(PRODUCT_DETAIL_KEY_PREFIX + productId);
         assertTrue(cachedJson != null && cachedJson.contains("fallback-product-" + suffix), "invalid cache should be replaced by database result");
+    }
+
+    @Test
+    void shouldUpdateProductAndClearDetailCache() throws Exception {
+        long suffix = System.currentTimeMillis();
+        Long oldCategoryId = insertCategory("update-old-category-" + suffix, 1);
+        Long newCategoryId = insertCategory("update-new-category-" + suffix, 2);
+        Long productId = insertProduct(oldCategoryId, "update-old-product-" + suffix, new BigDecimal("33.30"), "ON_SALE");
+
+        stringRedisTemplate.opsForValue().set(
+                PRODUCT_DETAIL_KEY_PREFIX + productId,
+                """
+                {"id":%d,"categoryId":%d,"categoryName":"stale-category","name":"stale-product","description":"stale description","price":11.1,"stock":99,"status":"ON_SALE","coverUrl":"https://example.com/stale.jpg"}
+                """.formatted(productId, oldCategoryId)
+        );
+
+        mockMvc.perform(put("/products/" + productId)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "categoryId": %d,
+                                  "name": "update-new-product-%d",
+                                  "description": "updated description",
+                                  "price": 99.90,
+                                  "stock": 25,
+                                  "status": "OFF_SALE",
+                                  "coverUrl": "https://example.com/update-new-%d.jpg"
+                                }
+                                """.formatted(newCategoryId, suffix, suffix)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.id").value(productId))
+                .andExpect(jsonPath("$.data.categoryId").value(newCategoryId))
+                .andExpect(jsonPath("$.data.categoryName").value("update-new-category-" + suffix))
+                .andExpect(jsonPath("$.data.name").value("update-new-product-" + suffix))
+                .andExpect(jsonPath("$.data.description").value("updated description"))
+                .andExpect(jsonPath("$.data.price").value(99.9))
+                .andExpect(jsonPath("$.data.stock").value(25))
+                .andExpect(jsonPath("$.data.status").value("OFF_SALE"));
+
+        String cachedAfterUpdate = stringRedisTemplate.opsForValue().get(PRODUCT_DETAIL_KEY_PREFIX + productId);
+        org.junit.jupiter.api.Assertions.assertNull(cachedAfterUpdate, "product detail cache should be deleted after update");
+
+        mockMvc.perform(get("/products/" + productId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.categoryId").value(newCategoryId))
+                .andExpect(jsonPath("$.data.categoryName").value("update-new-category-" + suffix))
+                .andExpect(jsonPath("$.data.name").value("update-new-product-" + suffix))
+                .andExpect(jsonPath("$.data.price").value(99.9))
+                .andExpect(jsonPath("$.data.stock").value(25))
+                .andExpect(jsonPath("$.data.status").value("OFF_SALE"));
+
+        String rebuiltCache = stringRedisTemplate.opsForValue().get(PRODUCT_DETAIL_KEY_PREFIX + productId);
+        assertTrue(rebuiltCache != null && rebuiltCache.contains("update-new-product-" + suffix), "product detail cache should be rebuilt with updated data");
+    }
+
+    @Test
+    void shouldReturn404WhenUpdatingMissingProduct() throws Exception {
+        mockMvc.perform(put("/products/999999999")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "categoryId": 1,
+                                  "name": "missing-product",
+                                  "description": "missing description",
+                                  "price": 88.80,
+                                  "stock": 10,
+                                  "status": "ON_SALE",
+                                  "coverUrl": "https://example.com/missing.jpg"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(404))
+                .andExpect(jsonPath("$.message").value("product not found"));
     }
 
     private Long insertCategory(String name, int sort) {

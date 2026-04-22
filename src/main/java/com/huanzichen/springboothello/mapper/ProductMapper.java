@@ -24,4 +24,6 @@ public interface ProductMapper {
                              @Param("keyword") String keyword);
 
     int restoreStock(@Param("id") Long id, @Param("quantity") Integer quantity);
+
+    int updateById(Product product);
 }

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huanzichen.springboothello.common.ErrorCode;
 import com.huanzichen.springboothello.common.PageResult;
 import com.huanzichen.springboothello.dto.product.ProductQueryDTO;
+import com.huanzichen.springboothello.dto.product.ProductUpdateDTO;
 import com.huanzichen.springboothello.exception.BusinessException;
 import com.huanzichen.springboothello.mapper.ProductMapper;
 import com.huanzichen.springboothello.model.Product;
@@ -79,6 +80,31 @@ public class ProductService {
         } catch (JsonProcessingException e) {
         }
         return product;
+    }
+
+    public Product updateProduct(Long id, ProductUpdateDTO productUpdateDTO) {
+        Product existed = productMapper.findById(id);
+        if (existed == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "product not found");
+        }
+
+        Product product = new Product();
+        product.setId(id);
+        product.setCategoryId(productUpdateDTO.getCategoryId());
+        product.setName(productUpdateDTO.getName());
+        product.setDescription(productUpdateDTO.getDescription());
+        product.setPrice(productUpdateDTO.getPrice());
+        product.setStock(productUpdateDTO.getStock());
+        product.setStatus(productUpdateDTO.getStatus());
+        product.setCoverUrl(productUpdateDTO.getCoverUrl());
+
+        int rows = productMapper.updateById(product);
+        if (rows == 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "failed to update product");
+        }
+
+        stringRedisTemplate.delete(PRODUCT_DETAIL_KEY_PREFIX + id);
+        return productMapper.findById(id);
     }
 
     private void validatePageParam(Integer page, Integer size) {

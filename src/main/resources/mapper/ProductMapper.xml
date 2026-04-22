@@ -95,4 +95,15 @@
         where id = #{id}
     </update>
 
+    <update id="updateById">
+        update products
+        set category_id = #{categoryId},
+        name = #{name},
+        description = #{description},
+        price = #{price},
+        stock = #{stock},
+        status = #{status},
+        cover_url = #{coverUrl}
+        where id = #{id}
+    </update>
 </mapper>
