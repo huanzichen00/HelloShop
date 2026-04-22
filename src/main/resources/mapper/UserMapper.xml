@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.huanzichen.springboothello.mapper.UserMapper">
+
+<select id="findPageWithSort" resultType="com.huanzichen.springboothello.model.UserInfo">
+    select id, name, age
+    from users
+    <choose>
+        <when test="sort == 'id' and order == 'desc'">
+            order by id desc
+        </when>
+        <when test="sort == 'id' and order == 'asc'">
+            order by id asc
+        </when>
+        <when test="sort == 'age' and order == 'desc'">
+            order by age desc
+        </when>
+        <when test="sort == 'age' and order == 'asc'">
+            order by age asc
+        </when>
+        <otherwise>
+            order by id asc
+        </otherwise>
+    </choose>
+    limit #{offset}, #{size}
+</select>
+
+<select id="searchByNameWithPageAndSort"
+resultType="com.huanzichen.springboothello.model.UserInfo">
+    select id, name, age
+    from users
+    where name like concat('%', #{name}, '%')
+    <choose>
+        <when test="sort == 'id' and order == 'desc'">
+            order by id desc
+        </when>
+        <when test="sort == 'id' and order == 'asc'">
+            order by id asc
+        </when>
+        <when test="sort == 'age' and order == 'desc'">
+            order by age desc
+        </when>
+        <when test="sort == 'age' and order == 'asc'">
+            order by age asc
+        </when>
+        <otherwise>
+            order by id asc
+        </otherwise>
+    </choose>
+    limit #{offset}, #{size}
+</select>
+
+<select id="countByName" resultType="java.lang.Long">
+    select count(*)
+    from users
+    where name like concat('%', #{name}, '%')
+</select>
+
+<select id="searchWithConditionsAndPage"
+resultType="com.huanzichen.springboothello.model.UserInfo">
+    select id, name, age
+    from users
+    <where>
+        <if test="name != null and name != ''">
+            name like concat('%', #{name}, '%')
+        </if>
+        <if test="minAge != null">
+            and age &gt;= #{minAge}
+        </if>
+        <if test="maxAge != null">
+            and age &lt;= #{maxAge}
+        </if>
+    </where>
+
+    <choose>
+        <when test="sort == 'id' and order == 'desc'">
+            order by id desc
+        </when>
+        <when test="sort == 'id' and order == 'asc'">
+            order by id asc
+        </when>
+        <when test="sort == 'age' and order == 'desc'">
+            order by age desc
+        </when>
+        <when test="sort == 'age' and order == 'asc'">
+            order by age asc
+        </when>
+        <otherwise>
+            order by id asc
+        </otherwise>
+    </choose>
+
+    limit #{offset}, #{size}
+</select>
+
+<select id="countWithConditions" resultType="java.lang.Long">
+    select count(*)
+    from users
+    <where>
+        <if test="name != null and name != ''">
+            name like concat('%', #{name}, '%')
+        </if>
+        <if test="minAge != null">
+            and age &gt;= #{minAge}
+        </if>
+        <if test="maxAge != null">
+            and age &lt;= #{maxAge}
+        </if>
+    </where>
+</select>
+
+</mapper>

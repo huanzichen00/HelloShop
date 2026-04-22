@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.huanzichen.springboothello.mapper.TaskMapper">
+
+<select id="searchWithConditionsAndPage"
+resultType="com.huanzichen.springboothello.model.TaskInfo">
+    select id, title, description, status, user_id as userId
+    from tasks
+    <where>
+        <if test="title != null and title != ''">
+            title like concat('%', #{title}, '%')
+        </if>
+        <if test="status != null and status != ''">
+            and status = #{status}
+        </if>
+        <if test="userId != null">
+            and user_id = #{userId}
+        </if>
+    </where>
+    <choose>
+        <when test="sort == 'id' and order == 'desc'">
+            order by id desc
+        </when>
+        <otherwise>
+            order by id asc
+        </otherwise>
+    </choose>
+    limit #{offset}, #{size}
+</select>
+
+<select id="countWithConditions" resultType="java.lang.Long">
+    select count(*)
+    from tasks
+    <where>
+        <if test="title != null and title != ''">
+            title like concat('%', #{title}, '%')
+        </if>
+        <if test="status != null and status != ''">
+            and status = #{status}
+        </if>
+        <if test="userId != null">
+            and user_id = #{userId}
+        </if>
+    </where>
+</select>
+
+</mapper>
