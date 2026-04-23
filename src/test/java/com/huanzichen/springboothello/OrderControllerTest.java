@@ -54,6 +54,9 @@ public class OrderControllerTest {
 
     @AfterEach
     void cleanup() {
+        for (Long orderId : orderIds) {
+            jdbcTemplate.update("delete from notifications where order_id = ?", orderId);
+        }
         for (Long orderItemId : orderItemIds) {
             jdbcTemplate.update("delete from order_items where id = ?", orderItemId);
         }
