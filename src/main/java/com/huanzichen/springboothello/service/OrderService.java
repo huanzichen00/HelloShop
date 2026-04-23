@@ -3,6 +3,7 @@ package com.huanzichen.springboothello.service;
 import com.huanzichen.springboothello.common.ErrorCode;
 import com.huanzichen.springboothello.common.UserContext;
 import com.huanzichen.springboothello.dto.order.OrderCreateDTO;
+import com.huanzichen.springboothello.dto.order.OrderCreatedMessage;
 import com.huanzichen.springboothello.exception.BusinessException;
 import com.huanzichen.springboothello.mapper.CartItemMapper;
 import com.huanzichen.springboothello.mapper.OrderItemMapper;
@@ -34,13 +35,15 @@ public class OrderService {
     private final ProductMapper productMapper;
     private final OrderItemMapper orderItemMapper;
     private final StringRedisTemplate stringRedisTemplate;
+    private final OrderMessageProducer orderMessageProducer;
 
-    public OrderService(CartItemMapper cartItemMapper, OrderMapper orderMapper, ProductMapper productMapper, OrderItemMapper orderItemMapper, StringRedisTemplate stringRedisTemplate) {
+    public OrderService(CartItemMapper cartItemMapper, OrderMapper orderMapper, ProductMapper productMapper, OrderItemMapper orderItemMapper, StringRedisTemplate stringRedisTemplate, OrderMessageProducer orderMessageProducer) {
         this.cartItemMapper = cartItemMapper;
         this.orderMapper = orderMapper;
         this.productMapper = productMapper;
         this.orderItemMapper = orderItemMapper;
         this.stringRedisTemplate = stringRedisTemplate;
+        this.orderMessageProducer = orderMessageProducer;
     }
 
     @Transactional
@@ -101,6 +104,15 @@ public class OrderService {
 
             deductStock(cartItems);
             removeCartItems(orderCreateDTO.getCartItemIds());
+
+            OrderCreatedMessage message = new OrderCreatedMessage();
+            message.setOrderId(order.getId());
+            message.setOrderNo(order.getOrderNo());
+            message.setUserId(userId);
+            message.setTotalAmount(totalAmount);
+            message.setTotalQuantity(totalQuantity);
+
+            orderMessageProducer.sendOrderCreatedMessage(message);
 
             Order createdOrder = orderMapper.findById(order.getId());
             createdOrder.setItems(orderItemMapper.findByOrderId(order.getId()));

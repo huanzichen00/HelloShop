@@ -31,3 +31,9 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Local Notes ###
+STUDY_NOTE_*.md
+INTERVIEW_*.md
+ECOMMERCE_V1_*.md
+MUSIC_REWRITE_V1_*.md

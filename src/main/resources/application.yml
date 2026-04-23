@@ -20,6 +20,12 @@ spring:
     enabled: true
     locations: classpath:db
     baseline-on-migrate: false
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
 
 mybatis:
   mapper-locations: classpath:mapper/*.xml
+

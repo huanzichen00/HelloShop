@@ -13,6 +13,8 @@
 - Maven
 - MyBatis
 - MySQL
+- Redis
+- RabbitMQ
 - Jakarta Validation
 
 ## 已完成功能
@@ -62,6 +64,24 @@
 - 任务模块实现了基础数据权限控制
 - 已升级为用户名密码登录 + BCrypt + JWT
 - logout 通过 Redis 黑名单让 JWT 真正失效
+
+### 电商模块
+
+- 分类列表、商品列表、商品详情
+- 购物车增删改查
+- 下单、订单列表、订单详情
+- 取消订单并恢复库存
+- 支付订单状态流转
+- `order_items` 保存商品快照
+
+### Redis 与消息队列
+
+- 商品详情缓存
+- 热门商品列表缓存
+- 商品更新后主动删除缓存
+- 下单防重复提交
+- 下单成功后发送 `order.created` 消息
+- RabbitMQ 消费端处理订单创建后的异步逻辑
 
 ### 基础能力
 
@@ -150,6 +170,23 @@ src/main/java/com/huanzichen/springboothello
 - `PUT /users/me`
 - `GET /users/me/tasks`
 
+### 电商模块
+
+- `GET /categories`
+- `GET /products`
+- `GET /products/hot`
+- `GET /products/{id}`
+- `PUT /products/{id}`
+- `GET /cart`
+- `POST /cart/items`
+- `PUT /cart/items/{id}`
+- `DELETE /cart/items/{id}`
+- `POST /orders`
+- `GET /orders`
+- `GET /orders/{id}`
+- `PUT /orders/{id}/cancel`
+- `PUT /orders/{id}/pay`
+
 ## 统一返回示例
 
 ### 成功返回
@@ -212,6 +249,8 @@ src/main/java/com/huanzichen/springboothello
 - 用户模块与任务模块协同
 - 登录鉴权与数据权限控制
 - JWT 与 Redis 黑名单登出
+- Redis 缓存与下单防重复提交
+- RabbitMQ 最小异步链路
 - 进一步向项目化改造推进
 
 ## 后续计划
