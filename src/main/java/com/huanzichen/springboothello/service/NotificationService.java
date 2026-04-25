@@ -32,13 +32,18 @@ public class NotificationService {
         return notificationMapper.selectList(queryWrapper);
     }
 
-    public PageResult<Notification> listMyNotificationsByPage(Integer page, Integer size) {
+    public PageResult<Notification> listMyNotificationsByPage(Integer page,
+                                                              Integer size,
+                                                              Boolean isRead,
+                                                              String type) {
         validatePageParams(page, size);
         Long userId = UserContext.getCurrentUserId();
         int offset = (page - 1) * size;
 
         LambdaQueryWrapper<Notification> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(Notification::getUserId, userId)
+                .eq(isRead != null, Notification::getIsRead, isRead)
+                .eq(type != null && !type.isBlank(), Notification::getType, type)
                 .orderByDesc(Notification::getCreatedAt)
                 .orderByDesc(Notification::getId)
                 .last("limit " + offset + ", " + size);
@@ -46,7 +51,9 @@ public class NotificationService {
         List<Notification> list = notificationMapper.selectList(queryWrapper);
 
         LambdaQueryWrapper<Notification> countQueryWrapper = new LambdaQueryWrapper<>();
-        countQueryWrapper.eq(Notification::getUserId, userId);
+        countQueryWrapper.eq(Notification::getUserId, userId)
+                .eq(isRead != null, Notification::getIsRead, isRead)
+                .eq(type != null && !type.isBlank(), Notification::getType, type);
         Long total = notificationMapper.selectCount(countQueryWrapper);
 
         int totalPages = (int) ((total + size - 1) / size);

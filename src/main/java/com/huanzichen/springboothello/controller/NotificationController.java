@@ -24,8 +24,11 @@ public class NotificationController {
     }
 
     @GetMapping("/page")
-    public Result<PageResult<Notification>> listMyNotificationsByPage(Integer page, Integer size) {
-        return Result.success(notificationService.listMyNotificationsByPage(page, size));
+    public Result<PageResult<Notification>> listMyNotificationsByPage(Integer page,
+                                                                      Integer size,
+                                                                      Boolean isRead,
+                                                                      String type) {
+        return Result.success(notificationService.listMyNotificationsByPage(page, size, isRead, type));
     }
 
     @GetMapping("/unread-count")

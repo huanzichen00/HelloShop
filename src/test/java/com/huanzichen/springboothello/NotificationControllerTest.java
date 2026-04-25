@@ -176,6 +176,68 @@ public class NotificationControllerTest {
     }
 
     @Test
+    void shouldFilterPagedNotificationsByIsRead() throws Exception {
+        long suffix = System.nanoTime();
+        String username = "notify_read_f_" + suffix;
+        String token = registerAndLogin(username);
+        Long userId = findUserIdByUsername(username);
+
+        Long unreadNotificationId = insertNotification(userId, null, "ORDER_CREATED", "unread-filter", "unread content", false);
+        Long readNotificationId = insertNotification(userId, null, "ORDER_CREATED", "read-filter", "read content", true);
+
+        setNotificationCreatedAt(unreadNotificationId, "2039-01-01 10:01:00");
+        setNotificationCreatedAt(readNotificationId, "2039-01-01 10:02:00");
+
+        mockMvc.perform(withToken(get("/notifications/page")
+                        .param("page", "1")
+                        .param("size", "10")
+                        .param("isRead", "false"), token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.list.length()").value(1))
+                .andExpect(jsonPath("$.data.list[0].id").value(unreadNotificationId))
+                .andExpect(jsonPath("$.data.list[0].isRead").value(false));
+    }
+
+    @Test
+    void shouldFilterPagedNotificationsByType() throws Exception {
+        long suffix = System.nanoTime();
+        String firstUsername = "notify_type_a_" + suffix;
+        String secondUsername = "notify_type_b_" + suffix;
+        String firstToken = registerAndLogin(firstUsername);
+        registerAndLogin(secondUsername);
+
+        Long firstUserId = findUserIdByUsername(firstUsername);
+        Long secondUserId = findUserIdByUsername(secondUsername);
+
+        Long createdNotificationId = insertNotification(firstUserId, null, "ORDER_CREATED", "created-filter", "created content", false);
+        Long timeoutNotificationId = insertNotification(firstUserId, null, "ORDER_TIMEOUT_CANCELED", "timeout-filter", "timeout content", false);
+        Long otherUserNotificationId = insertNotification(secondUserId, null, "ORDER_CREATED", "other-created-filter", "other content", false);
+
+        setNotificationCreatedAt(createdNotificationId, "2040-01-01 10:01:00");
+        setNotificationCreatedAt(timeoutNotificationId, "2040-01-01 10:02:00");
+        setNotificationCreatedAt(otherUserNotificationId, "2040-01-01 10:03:00");
+
+        String response = mockMvc.perform(withToken(get("/notifications/page")
+                        .param("page", "1")
+                        .param("size", "10")
+                        .param("type", "ORDER_CREATED"), firstToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.list.length()").value(1))
+                .andExpect(jsonPath("$.data.list[0].id").value(createdNotificationId))
+                .andExpect(jsonPath("$.data.list[0].type").value("ORDER_CREATED"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertTrue(!response.contains("timeout-filter"), "should not return other notification types");
+        assertTrue(!response.contains("other-created-filter"), "should not return other user's notifications");
+    }
+
+    @Test
     void shouldCountOnlyCurrentUsersUnreadNotifications() throws Exception {
         long suffix = System.nanoTime();
         String firstUsername = "notification_count_user_a_" + suffix;
