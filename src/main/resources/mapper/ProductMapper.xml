@@ -5,6 +5,16 @@
 
 <mapper namespace="com.huanzichen.springboothello.mapper.ProductMapper">
 
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        insert into products(category_id, name, description, price, stock, status, cover_url)
+        values (#{categoryId}, #{name}, #{description}, #{price}, #{stock}, #{status}, #{coverUrl})
+    </insert>
+
+    <delete id="deleteById">
+        delete from products
+        where id = #{id}
+    </delete>
+
     <select id="findById"
             resultType="com.huanzichen.springboothello.model.Product">
         select p.id,
@@ -21,6 +31,18 @@
             from products p
             left join categories c on p.category_id = c.id
             where p.id = #{id}
+    </select>
+
+    <select id="countCartItemsByProductId" resultType="java.lang.Long">
+        select count(*)
+        from cart_items
+        where product_id = #{productId}
+    </select>
+
+    <select id="countOrderItemsByProductId" resultType="java.lang.Long">
+        select count(*)
+        from order_items
+        where product_id = #{productId}
     </select>
 
     <select id="findHotProducts"

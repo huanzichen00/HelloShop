@@ -29,3 +29,6 @@ spring:
 mybatis:
   mapper-locations: classpath:mapper/*.xml
 
+order:
+  timeout-minutes: 30
+

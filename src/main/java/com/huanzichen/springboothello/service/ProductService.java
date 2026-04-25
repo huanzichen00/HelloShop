@@ -4,10 +4,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huanzichen.springboothello.common.ErrorCode;
 import com.huanzichen.springboothello.common.PageResult;
+import com.huanzichen.springboothello.dto.product.ProductCreateDTO;
 import com.huanzichen.springboothello.dto.product.ProductQueryDTO;
 import com.huanzichen.springboothello.dto.product.ProductUpdateDTO;
 import com.huanzichen.springboothello.exception.BusinessException;
+import com.huanzichen.springboothello.mapper.CategoryMapper;
 import com.huanzichen.springboothello.mapper.ProductMapper;
+import com.huanzichen.springboothello.model.Category;
 import com.huanzichen.springboothello.model.Product;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -24,14 +27,43 @@ public class ProductService {
     private static final Duration HOT_PRODUCT_TTL = Duration.ofMinutes(10);
     private static final int HOT_PRODUCT_LIMIT = 5;
 
+    private final CategoryMapper categoryMapper;
     private final ProductMapper productMapper;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
 
-    public ProductService(ProductMapper productMapper, StringRedisTemplate stringRedisTemplate, ObjectMapper objectMapper) {
+    public ProductService(CategoryMapper categoryMapper,
+                          ProductMapper productMapper,
+                          StringRedisTemplate stringRedisTemplate,
+                          ObjectMapper objectMapper) {
+        this.categoryMapper = categoryMapper;
         this.productMapper = productMapper;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
+    }
+
+    public Product createProduct(ProductCreateDTO productCreateDTO) {
+        Category category = categoryMapper.findById(productCreateDTO.getCategoryId());
+        if (category == null) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "category not found");
+        }
+
+        Product product = new Product();
+        product.setCategoryId(productCreateDTO.getCategoryId());
+        product.setName(productCreateDTO.getName());
+        product.setDescription(productCreateDTO.getDescription());
+        product.setPrice(productCreateDTO.getPrice());
+        product.setStock(productCreateDTO.getStock());
+        product.setStatus(productCreateDTO.getStatus());
+        product.setCoverUrl(productCreateDTO.getCoverUrl());
+
+        int rows = productMapper.insert(product);
+        if (rows == 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "failed to create product");
+        }
+
+        stringRedisTemplate.delete(HOT_PRODUCT_KEY);
+        return productMapper.findById(product.getId());
     }
 
     public PageResult<Product> searchProductsByPage(ProductQueryDTO queryDTO) {
@@ -130,6 +162,31 @@ public class ProductService {
         stringRedisTemplate.delete(HOT_PRODUCT_KEY);
 
         return productMapper.findById(id);
+    }
+
+    public void deleteProduct(Long id) {
+        Product existed = productMapper.findById(id);
+        if (existed == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "product not found");
+        }
+
+        Long cartItemCount = productMapper.countCartItemsByProductId(id);
+        if (cartItemCount != null && cartItemCount > 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "product has related cart items");
+        }
+
+        Long orderItemCount = productMapper.countOrderItemsByProductId(id);
+        if (orderItemCount != null && orderItemCount > 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "product has related order items");
+        }
+
+        int rows = productMapper.deleteById(id);
+        if (rows == 0) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "product not found");
+        }
+
+        stringRedisTemplate.delete(PRODUCT_DETAIL_KEY_PREFIX + id);
+        stringRedisTemplate.delete(HOT_PRODUCT_KEY);
     }
 
     private void validatePageParam(Integer page, Integer size) {

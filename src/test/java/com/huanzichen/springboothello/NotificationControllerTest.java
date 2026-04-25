@@ -27,6 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -76,6 +77,30 @@ public class NotificationControllerTest {
     }
 
     @Test
+    void shouldRequireLoginWhenListingNotificationsByPage() throws Exception {
+        mockMvc.perform(get("/notifications/page").param("page", "1").param("size", "10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(401))
+                .andExpect(jsonPath("$.message").value("please login first"));
+    }
+
+    @Test
+    void shouldRequireLoginWhenCountingUnreadNotifications() throws Exception {
+        mockMvc.perform(get("/notifications/unread-count"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(401))
+                .andExpect(jsonPath("$.message").value("please login first"));
+    }
+
+    @Test
+    void shouldRequireLoginWhenMarkingAllNotificationsAsRead() throws Exception {
+        mockMvc.perform(put("/notifications/read-all"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(401))
+                .andExpect(jsonPath("$.message").value("please login first"));
+    }
+
+    @Test
     void shouldListOnlyCurrentUsersNotificationsOrderedByCreatedAtDescThenIdDesc() throws Exception {
         long suffix = System.nanoTime();
         String firstUsername = "notification_user_a_" + suffix;
@@ -111,6 +136,68 @@ public class NotificationControllerTest {
     }
 
     @Test
+    void shouldPageOnlyCurrentUsersNotificationsOrderedByCreatedAtDescThenIdDesc() throws Exception {
+        long suffix = System.nanoTime();
+        String firstUsername = "notification_page_user_a_" + suffix;
+        String secondUsername = "notification_page_user_b_" + suffix;
+        String firstToken = registerAndLogin(firstUsername);
+        registerAndLogin(secondUsername);
+
+        Long firstUserId = findUserIdByUsername(firstUsername);
+        Long secondUserId = findUserIdByUsername(secondUsername);
+
+        Long firstNotificationId = insertNotification(firstUserId, null, "ORDER_CREATED", "page-first", "first content", false);
+        Long secondNotificationId = insertNotification(firstUserId, null, "ORDER_CREATED", "page-second", "second content", false);
+        Long thirdNotificationId = insertNotification(firstUserId, null, "ORDER_CREATED", "page-third", "third content", false);
+        Long otherNotificationId = insertNotification(secondUserId, null, "ORDER_CREATED", "page-other", "other content", false);
+
+        setNotificationCreatedAt(firstNotificationId, "2038-01-01 10:01:00");
+        setNotificationCreatedAt(secondNotificationId, "2038-01-01 10:02:00");
+        setNotificationCreatedAt(thirdNotificationId, "2038-01-01 10:03:00");
+        setNotificationCreatedAt(otherNotificationId, "2038-01-01 10:04:00");
+
+        String response = mockMvc.perform(withToken(get("/notifications/page")
+                        .param("page", "1")
+                        .param("size", "2"), firstToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.total").value(3))
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.size").value(2))
+                .andExpect(jsonPath("$.data.totalPages").value(2))
+                .andExpect(jsonPath("$.data.list.length()").value(2))
+                .andExpect(jsonPath("$.data.list[0].title").value("page-third"))
+                .andExpect(jsonPath("$.data.list[1].title").value("page-second"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertTrue(!response.contains("page-other"), "should not return other user's notifications");
+    }
+
+    @Test
+    void shouldCountOnlyCurrentUsersUnreadNotifications() throws Exception {
+        long suffix = System.nanoTime();
+        String firstUsername = "notification_count_user_a_" + suffix;
+        String secondUsername = "notification_count_user_b_" + suffix;
+        String firstToken = registerAndLogin(firstUsername);
+        registerAndLogin(secondUsername);
+
+        Long firstUserId = findUserIdByUsername(firstUsername);
+        Long secondUserId = findUserIdByUsername(secondUsername);
+
+        insertNotification(firstUserId, null, "ORDER_CREATED", "unread-a-1", "unread content", false);
+        insertNotification(firstUserId, null, "ORDER_CREATED", "unread-a-2", "unread content", false);
+        insertNotification(firstUserId, null, "ORDER_CREATED", "read-a", "read content", true);
+        insertNotification(secondUserId, null, "ORDER_CREATED", "unread-b", "other unread content", false);
+
+        mockMvc.perform(withToken(get("/notifications/unread-count"), firstToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data").value(2));
+    }
+
+    @Test
     void shouldMarkOwnNotificationAsRead() throws Exception {
         long suffix = System.nanoTime();
         String username = "notification_read_user_" + suffix;
@@ -134,6 +221,54 @@ public class NotificationControllerTest {
     }
 
     @Test
+    void shouldMarkAllOwnUnreadNotificationsAsRead() throws Exception {
+        long suffix = System.nanoTime();
+        String firstUsername = "notification_read_all_user_a_" + suffix;
+        String secondUsername = "notification_read_all_user_b_" + suffix;
+        String firstToken = registerAndLogin(firstUsername);
+        registerAndLogin(secondUsername);
+
+        Long firstUserId = findUserIdByUsername(firstUsername);
+        Long secondUserId = findUserIdByUsername(secondUsername);
+
+        Long firstUnreadId = insertNotification(firstUserId, null, "ORDER_CREATED", "first unread", "first unread content", false);
+        Long secondUnreadId = insertNotification(firstUserId, null, "ORDER_CREATED", "second unread", "second unread content", false);
+        Long firstReadId = insertNotification(firstUserId, null, "ORDER_CREATED", "already read", "already read content", true);
+        Long otherUnreadId = insertNotification(secondUserId, null, "ORDER_CREATED", "other unread", "other unread content", false);
+
+        mockMvc.perform(withToken(put("/notifications/read-all"), firstToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data").value(2));
+
+        Integer firstUnreadIsRead = jdbcTemplate.queryForObject(
+                "select is_read from notifications where id = ?",
+                Integer.class,
+                firstUnreadId
+        );
+        Integer secondUnreadIsRead = jdbcTemplate.queryForObject(
+                "select is_read from notifications where id = ?",
+                Integer.class,
+                secondUnreadId
+        );
+        Integer firstReadIsRead = jdbcTemplate.queryForObject(
+                "select is_read from notifications where id = ?",
+                Integer.class,
+                firstReadId
+        );
+        Integer otherUnreadIsRead = jdbcTemplate.queryForObject(
+                "select is_read from notifications where id = ?",
+                Integer.class,
+                otherUnreadId
+        );
+
+        assertEquals(1, firstUnreadIsRead);
+        assertEquals(1, secondUnreadIsRead);
+        assertEquals(1, firstReadIsRead);
+        assertEquals(0, otherUnreadIsRead);
+    }
+
+    @Test
     void shouldReturn404WhenReadingOtherUsersNotification() throws Exception {
         long suffix = System.nanoTime();
         String ownerUsername = "notification_owner_" + suffix;
@@ -145,6 +280,46 @@ public class NotificationControllerTest {
         Long notificationId = insertNotification(ownerUserId, null, "ORDER_CREATED", "private-title", "private content", false);
 
         mockMvc.perform(withToken(put("/notifications/" + notificationId + "/read"), otherToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(404))
+                .andExpect(jsonPath("$.message").value("notification not found"));
+    }
+
+    @Test
+    void shouldDeleteOwnNotification() throws Exception {
+        long suffix = System.nanoTime();
+        String username = "notification_delete_user_" + suffix;
+        String token = registerAndLogin(username);
+        Long userId = findUserIdByUsername(username);
+
+        Long notificationId = insertNotification(userId, null, "ORDER_CREATED", "delete-title", "delete content", false);
+
+        mockMvc.perform(withToken(delete("/notifications/" + notificationId), token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data").doesNotExist());
+
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(*) from notifications where id = ?",
+                Integer.class,
+                notificationId
+        );
+        assertEquals(0, count);
+        notificationIds.remove(notificationId);
+    }
+
+    @Test
+    void shouldReturn404WhenDeletingOtherUsersNotification() throws Exception {
+        long suffix = System.nanoTime();
+        String ownerUsername = "notification_delete_owner_" + suffix;
+        String otherUsername = "notification_delete_other_" + suffix;
+        registerAndLogin(ownerUsername);
+        String otherToken = registerAndLogin(otherUsername);
+
+        Long ownerUserId = findUserIdByUsername(ownerUsername);
+        Long notificationId = insertNotification(ownerUserId, null, "ORDER_CREATED", "delete-private", "private content", false);
+
+        mockMvc.perform(withToken(delete("/notifications/" + notificationId), otherToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(404))
                 .andExpect(jsonPath("$.message").value("notification not found"));

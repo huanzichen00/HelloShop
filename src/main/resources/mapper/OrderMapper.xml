@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.huanzichen.springboothello.mapper.OrderMapper">
+    <select id="findByUserIdPage"
+            resultType="com.huanzichen.springboothello.model.Order">
+        select id,
+               order_no as orderNo,
+               user_id as userId,
+               status,
+               total_amount as totalAmount,
+               total_quantity as totalQuantity,
+               created_at as createdAt,
+               updated_at as updatedAt
+        from orders
+        where user_id = #{userId}
+        <if test="status != null and status != ''">
+            and status = #{status}
+        </if>
+        <choose>
+            <when test="sort == 'totalAmount' and order == 'asc'">
+                order by total_amount asc, id asc
+            </when>
+            <when test="sort == 'totalAmount' and order == 'desc'">
+                order by total_amount desc, id desc
+            </when>
+            <when test="sort == 'createdAt' and order == 'asc'">
+                order by created_at asc, id asc
+            </when>
+            <otherwise>
+                order by created_at desc, id desc
+            </otherwise>
+        </choose>
+        limit #{offset}, #{size}
+    </select>
+
+    <select id="countByUserId" resultType="java.lang.Long">
+        select count(*)
+        from orders
+        where user_id = #{userId}
+        <if test="status != null and status != ''">
+            and status = #{status}
+        </if>
+    </select>
+</mapper>

@@ -10,6 +10,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 
 import java.math.BigDecimal;
 import java.sql.PreparedStatement;
@@ -19,6 +20,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -39,11 +41,16 @@ public class CatalogControllerTest {
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
+    private final List<Long> cartItemIds = new ArrayList<>();
     private final List<Long> productIds = new ArrayList<>();
     private final List<Long> categoryIds = new ArrayList<>();
+    private final List<Long> userIds = new ArrayList<>();
 
     @AfterEach
     void cleanup() {
+        for (Long cartItemId : cartItemIds) {
+            jdbcTemplate.update("delete from cart_items where id = ?", cartItemId);
+        }
         for (Long productId : productIds) {
             jdbcTemplate.update("delete from products where id = ?", productId);
             stringRedisTemplate.delete(PRODUCT_DETAIL_KEY_PREFIX + productId);
@@ -52,8 +59,13 @@ public class CatalogControllerTest {
         for (Long categoryId : categoryIds) {
             jdbcTemplate.update("delete from categories where id = ?", categoryId);
         }
+        for (Long userId : userIds) {
+            jdbcTemplate.update("delete from users where id = ?", userId);
+        }
+        cartItemIds.clear();
         productIds.clear();
         categoryIds.clear();
+        userIds.clear();
     }
 
     @Test
@@ -83,6 +95,82 @@ public class CatalogControllerTest {
         assertTrue(secondIndex >= 0, "second category should exist in response");
         assertTrue(topIndex < firstIndex, "lower sort category should appear first");
         assertTrue(firstIndex < secondIndex, "same sort categories should be ordered by id asc");
+    }
+
+    @Test
+    void shouldCreateCategory() throws Exception {
+        long suffix = System.currentTimeMillis();
+
+        mockMvc.perform(post("/categories")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name": "created-category-%d",
+                                  "sort": 3
+                                }
+                                """.formatted(suffix)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.name").value("created-category-" + suffix))
+                .andExpect(jsonPath("$.data.sort").value(3));
+
+        Long categoryId = jdbcTemplate.queryForObject(
+                "select id from categories where name = ?",
+                Long.class,
+                "created-category-" + suffix
+        );
+        categoryIds.add(categoryId);
+
+        mockMvc.perform(get("/categories"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data[?(@.id == %d)].name".formatted(categoryId)).value("created-category-" + suffix));
+    }
+
+    @Test
+    void shouldDeleteCategoryWhenNoRelatedProducts() throws Exception {
+        long suffix = System.currentTimeMillis();
+        Long categoryId = insertCategory("delete-category-" + suffix, 1);
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete("/categories/" + categoryId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data").doesNotExist());
+
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(*) from categories where id = ?",
+                Integer.class,
+                categoryId
+        );
+        org.junit.jupiter.api.Assertions.assertEquals(0, count);
+        categoryIds.remove(categoryId);
+    }
+
+    @Test
+    void shouldReturn404WhenDeletingMissingCategory() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete("/categories/999999999"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(404))
+                .andExpect(jsonPath("$.message").value("category not found"));
+    }
+
+    @Test
+    void shouldReturn400WhenDeletingCategoryWithRelatedProducts() throws Exception {
+        long suffix = System.currentTimeMillis();
+        Long categoryId = insertCategory("delete-related-category-" + suffix, 1);
+        insertProduct(categoryId, "delete-related-product-" + suffix, new BigDecimal("12.30"), "ON_SALE");
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete("/categories/" + categoryId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("category has related products"));
+
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(*) from categories where id = ?",
+                Integer.class,
+                categoryId
+        );
+        org.junit.jupiter.api.Assertions.assertEquals(1, count);
     }
 
     @Test
@@ -279,6 +367,137 @@ public class CatalogControllerTest {
     }
 
     @Test
+    void shouldCreateProductAndClearHotCache() throws Exception {
+        long suffix = System.currentTimeMillis();
+        Long categoryId = insertCategory("create-category-" + suffix, 1);
+        stringRedisTemplate.opsForValue().set(
+                HOT_PRODUCT_KEY,
+                """
+                [{"id":1,"categoryId":%d,"categoryName":"stale-category","name":"stale-hot-product","description":"stale hot description","price":22.2,"stock":10,"status":"ON_SALE","coverUrl":"https://example.com/stale-hot.jpg"}]
+                """.formatted(categoryId)
+        );
+
+        String response = mockMvc.perform(post("/products")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "categoryId": %d,
+                                  "name": "create-product-%d",
+                                  "description": "created description",
+                                  "price": 88.80,
+                                  "stock": 15,
+                                  "status": "ON_SALE",
+                                  "coverUrl": "https://example.com/create-%d.jpg"
+                                }
+                                """.formatted(categoryId, suffix, suffix)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.categoryId").value(categoryId))
+                .andExpect(jsonPath("$.data.categoryName").value("create-category-" + suffix))
+                .andExpect(jsonPath("$.data.name").value("create-product-" + suffix))
+                .andExpect(jsonPath("$.data.description").value("created description"))
+                .andExpect(jsonPath("$.data.price").value(88.8))
+                .andExpect(jsonPath("$.data.stock").value(15))
+                .andExpect(jsonPath("$.data.status").value("ON_SALE"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        Long productId = jdbcTemplate.queryForObject(
+                "select id from products where name = ?",
+                Long.class,
+                "create-product-" + suffix
+        );
+        productIds.add(productId);
+
+        String hotCachedAfterCreate = stringRedisTemplate.opsForValue().get(HOT_PRODUCT_KEY);
+        org.junit.jupiter.api.Assertions.assertNull(hotCachedAfterCreate, "hot product cache should be deleted after create");
+
+        mockMvc.perform(get("/products/hot"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data[0].name").value("create-product-" + suffix));
+
+        String rebuiltHotCache = stringRedisTemplate.opsForValue().get(HOT_PRODUCT_KEY);
+        assertTrue(rebuiltHotCache != null && rebuiltHotCache.contains("create-product-" + suffix), "hot product cache should be rebuilt with created product");
+        assertTrue(response.contains("create-product-" + suffix), "create response should contain created product data");
+    }
+
+    @Test
+    void shouldReturn400WhenCreatingProductWithMissingCategory() throws Exception {
+        mockMvc.perform(post("/products")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "categoryId": 999999999,
+                                  "name": "missing-category-product",
+                                  "description": "missing category description",
+                                  "price": 88.80,
+                                  "stock": 10,
+                                  "status": "ON_SALE",
+                                  "coverUrl": "https://example.com/missing-category.jpg"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("category not found"));
+    }
+
+    @Test
+    void shouldDeleteProductAndClearCaches() throws Exception {
+        long suffix = System.currentTimeMillis();
+        Long categoryId = insertCategory("delete-product-category-" + suffix, 1);
+        Long productId = insertProduct(categoryId, "delete-product-" + suffix, new BigDecimal("88.80"), "ON_SALE");
+
+        stringRedisTemplate.opsForValue().set(PRODUCT_DETAIL_KEY_PREFIX + productId, "{\"id\":%d}".formatted(productId));
+        stringRedisTemplate.opsForValue().set(HOT_PRODUCT_KEY, "[{\"id\":%d}]".formatted(productId));
+
+        mockMvc.perform(MockMvcRequestBuilders.delete("/products/" + productId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data").doesNotExist());
+
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(*) from products where id = ?",
+                Integer.class,
+                productId
+        );
+        org.junit.jupiter.api.Assertions.assertEquals(0, count);
+        org.junit.jupiter.api.Assertions.assertNull(stringRedisTemplate.opsForValue().get(PRODUCT_DETAIL_KEY_PREFIX + productId));
+        org.junit.jupiter.api.Assertions.assertNull(stringRedisTemplate.opsForValue().get(HOT_PRODUCT_KEY));
+        productIds.remove(productId);
+    }
+
+    @Test
+    void shouldReturn404WhenDeletingMissingProduct() throws Exception {
+        mockMvc.perform(MockMvcRequestBuilders.delete("/products/999999999"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(404))
+                .andExpect(jsonPath("$.message").value("product not found"));
+    }
+
+    @Test
+    void shouldReturn400WhenDeletingProductWithRelatedCartItems() throws Exception {
+        long suffix = System.currentTimeMillis();
+        Long categoryId = insertCategory("delete-product-related-category-" + suffix, 1);
+        Long productId = insertProduct(categoryId, "delete-product-related-" + suffix, new BigDecimal("66.60"), "ON_SALE");
+        Long userId = insertUser("delete_product_user_" + suffix);
+        insertCartItem(userId, productId, 1, true);
+
+        mockMvc.perform(MockMvcRequestBuilders.delete("/products/" + productId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("product has related cart items"));
+
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(*) from products where id = ?",
+                Integer.class,
+                productId
+        );
+        org.junit.jupiter.api.Assertions.assertEquals(1, count);
+    }
+
+    @Test
     void shouldUpdateProductAndClearDetailCache() throws Exception {
         long suffix = System.currentTimeMillis();
         Long oldCategoryId = insertCategory("update-old-category-" + suffix, 1);
@@ -431,5 +650,47 @@ public class CatalogControllerTest {
         Long productId = keyHolder.getKey().longValue();
         productIds.add(productId);
         return productId;
+    }
+
+    private Long insertUser(String username) {
+        KeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbcTemplate.update(
+                connection -> {
+                    PreparedStatement ps = connection.prepareStatement(
+                            "insert into users(username, password, name, age) values (?, ?, ?, ?)",
+                            Statement.RETURN_GENERATED_KEYS
+                    );
+                    ps.setString(1, username);
+                    ps.setString(2, "$2a$10$abcdefghijklmnopqrstuv123456789012345678901234567890");
+                    ps.setString(3, "catalog user");
+                    ps.setInt(4, 20);
+                    return ps;
+                },
+                keyHolder
+        );
+        Long userId = keyHolder.getKey().longValue();
+        userIds.add(userId);
+        return userId;
+    }
+
+    private Long insertCartItem(Long userId, Long productId, int quantity, boolean selected) {
+        KeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbcTemplate.update(
+                connection -> {
+                    PreparedStatement ps = connection.prepareStatement(
+                            "insert into cart_items(user_id, product_id, quantity, selected) values (?, ?, ?, ?)",
+                            Statement.RETURN_GENERATED_KEYS
+                    );
+                    ps.setLong(1, userId);
+                    ps.setLong(2, productId);
+                    ps.setInt(3, quantity);
+                    ps.setBoolean(4, selected);
+                    return ps;
+                },
+                keyHolder
+        );
+        Long cartItemId = keyHolder.getKey().longValue();
+        cartItemIds.add(cartItemId);
+        return cartItemId;
     }
 }

@@ -2,6 +2,7 @@ package com.huanzichen.springboothello.controller;
 
 import com.huanzichen.springboothello.common.PageResult;
 import com.huanzichen.springboothello.common.Result;
+import com.huanzichen.springboothello.dto.product.ProductCreateDTO;
 import com.huanzichen.springboothello.dto.product.ProductQueryDTO;
 import com.huanzichen.springboothello.dto.product.ProductUpdateDTO;
 import com.huanzichen.springboothello.model.Product;
@@ -24,6 +25,11 @@ public class ProductController {
         return Result.success(productService.searchProductsByPage(queryDTO));
     }
 
+    @PostMapping("/products")
+    public Result<Product> createProduct(@RequestBody @Valid ProductCreateDTO productCreateDTO) {
+        return Result.success(productService.createProduct(productCreateDTO));
+    }
+
     @GetMapping("/products/{id:\\d+}")
     public Result<Product> getProductById(@PathVariable Long id) {
         return Result.success(productService.getProductById(id));
@@ -37,5 +43,11 @@ public class ProductController {
     @PutMapping("/products/{id:\\d+}")
     public Result<Product> updateProductById(@PathVariable Long id, @RequestBody @Valid ProductUpdateDTO productUpdateDTO) {
         return Result.success(productService.updateProduct(id, productUpdateDTO));
+    }
+
+    @DeleteMapping("/products/{id:\\d+}")
+    public Result<Void> deleteProductById(@PathVariable Long id) {
+        productService.deleteProduct(id);
+        return Result.success();
     }
 }

@@ -9,7 +9,15 @@ import java.util.List;
 @Mapper
 public interface ProductMapper {
 
+    int insert(Product product);
+
+    int deleteById(Long id);
+
     Product findById(Long id);
+
+    Long countCartItemsByProductId(@Param("productId") Long productId);
+
+    Long countOrderItemsByProductId(@Param("productId") Long productId);
 
     List<Product> findHotProducts(@Param("limit") Integer limit);
 

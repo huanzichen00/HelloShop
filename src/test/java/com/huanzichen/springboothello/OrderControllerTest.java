@@ -2,6 +2,7 @@ package com.huanzichen.springboothello;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huanzichen.springboothello.service.OrderService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,6 +19,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import java.math.BigDecimal;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -45,6 +47,9 @@ public class OrderControllerTest {
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
+    @Autowired
+    private OrderService orderService;
+
     private final List<Long> orderItemIds = new ArrayList<>();
     private final List<Long> orderIds = new ArrayList<>();
     private final List<Long> cartItemIds = new ArrayList<>();
@@ -57,8 +62,22 @@ public class OrderControllerTest {
         for (Long orderId : orderIds) {
             jdbcTemplate.update("delete from notifications where order_id = ?", orderId);
         }
+        for (Long userId : userIds) {
+            jdbcTemplate.update("delete from notifications where user_id = ?", userId);
+        }
         for (Long orderItemId : orderItemIds) {
             jdbcTemplate.update("delete from order_items where id = ?", orderItemId);
+        }
+        try {
+            Thread.sleep(200);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        for (Long orderId : orderIds) {
+            jdbcTemplate.update("delete from notifications where order_id = ?", orderId);
+        }
+        for (Long userId : userIds) {
+            jdbcTemplate.update("delete from notifications where user_id = ?", userId);
         }
         for (Long orderId : orderIds) {
             jdbcTemplate.update("delete from orders where id = ?", orderId);
@@ -222,6 +241,306 @@ public class OrderControllerTest {
                 .andExpect(jsonPath("$.data.length()").value(1))
                 .andExpect(jsonPath("$.data[0].id").value(firstOrderId))
                 .andExpect(jsonPath("$.data[0].orderNo").value("LIST-A-" + suffix));
+
+        orderIds.add(firstOrderId);
+        orderIds.add(secondOrderId);
+    }
+
+    @Test
+    void shouldPageCurrentUsersOrders() throws Exception {
+        long suffix = System.currentTimeMillis();
+        String firstUsername = "order_page_user_a_" + suffix;
+        String secondUsername = "order_page_user_b_" + suffix;
+        String firstToken = registerAndLogin(firstUsername);
+        registerAndLogin(secondUsername);
+
+        Long firstUserId = findUserIdByUsername(firstUsername);
+        Long secondUserId = findUserIdByUsername(secondUsername);
+
+        Long firstOrderId = insertOrder(firstUserId, "PAGE-A-1-" + suffix, new BigDecimal("10.00"), 1);
+        Long secondOrderId = insertOrder(firstUserId, "PAGE-A-2-" + suffix, new BigDecimal("20.00"), 2);
+        Long otherOrderId = insertOrder(secondUserId, "PAGE-B-1-" + suffix, new BigDecimal("30.00"), 3);
+
+        jdbcTemplate.update("update orders set created_at = ?, updated_at = ? where id = ?",
+                "2036-01-01 10:01:00", "2036-01-01 10:01:00", firstOrderId);
+        jdbcTemplate.update("update orders set created_at = ?, updated_at = ? where id = ?",
+                "2036-01-01 10:02:00", "2036-01-01 10:02:00", secondOrderId);
+        jdbcTemplate.update("update orders set created_at = ?, updated_at = ? where id = ?",
+                "2036-01-01 10:03:00", "2036-01-01 10:03:00", otherOrderId);
+
+        mockMvc.perform(withToken(get("/orders/page")
+                        .param("page", "1")
+                        .param("size", "1"), firstToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.size").value(1))
+                .andExpect(jsonPath("$.data.totalPages").value(2))
+                .andExpect(jsonPath("$.data.list.length()").value(1))
+                .andExpect(jsonPath("$.data.list[0].id").value(secondOrderId))
+                .andExpect(jsonPath("$.data.list[0].orderNo").value("PAGE-A-2-" + suffix));
+
+        orderIds.add(firstOrderId);
+        orderIds.add(secondOrderId);
+        orderIds.add(otherOrderId);
+    }
+
+    @Test
+    void shouldFilterPagedOrdersByStatus() throws Exception {
+        long suffix = System.currentTimeMillis();
+        String username = "order_page_status_user_" + suffix;
+        String token = registerAndLogin(username);
+        Long userId = findUserIdByUsername(username);
+
+        Long pendingOrderId = insertOrder(userId, "PS-P-" + suffix, new BigDecimal("10.00"), 1);
+        Long paidOrderId = insertOrder(userId, "PS-D-" + suffix, new BigDecimal("20.00"), 2);
+        Long canceledOrderId = insertOrder(userId, "PS-C-" + suffix, new BigDecimal("30.00"), 3);
+
+        jdbcTemplate.update("update orders set status = 'PENDING_PAYMENT' where id = ?", pendingOrderId);
+        jdbcTemplate.update("update orders set status = 'PAID' where id = ?", paidOrderId);
+        jdbcTemplate.update("update orders set status = 'CANCELED' where id = ?", canceledOrderId);
+
+        mockMvc.perform(withToken(get("/orders/page")
+                        .param("page", "1")
+                        .param("size", "10")
+                        .param("status", "PAID"), token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.list.length()").value(1))
+                .andExpect(jsonPath("$.data.list[0].id").value(paidOrderId))
+                .andExpect(jsonPath("$.data.list[0].status").value("PAID"));
+
+        orderIds.add(pendingOrderId);
+        orderIds.add(paidOrderId);
+        orderIds.add(canceledOrderId);
+    }
+
+    @Test
+    void shouldSortPagedOrdersByTotalAmountDesc() throws Exception {
+        long suffix = System.currentTimeMillis();
+        String username = "order_page_sort_user_" + suffix;
+        String token = registerAndLogin(username);
+        Long userId = findUserIdByUsername(username);
+
+        Long lowAmountOrderId = insertOrder(userId, "SO-L-" + suffix, new BigDecimal("10.00"), 1);
+        Long highAmountOrderId = insertOrder(userId, "SO-H-" + suffix, new BigDecimal("50.00"), 2);
+        Long middleAmountOrderId = insertOrder(userId, "SO-M-" + suffix, new BigDecimal("30.00"), 3);
+
+        mockMvc.perform(withToken(get("/orders/page")
+                        .param("page", "1")
+                        .param("size", "3")
+                        .param("sort", "totalAmount")
+                        .param("order", "desc"), token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.total").value(3))
+                .andExpect(jsonPath("$.data.list.length()").value(3))
+                .andExpect(jsonPath("$.data.list[0].id").value(highAmountOrderId))
+                .andExpect(jsonPath("$.data.list[1].id").value(middleAmountOrderId))
+                .andExpect(jsonPath("$.data.list[2].id").value(lowAmountOrderId));
+
+        orderIds.add(lowAmountOrderId);
+        orderIds.add(highAmountOrderId);
+        orderIds.add(middleAmountOrderId);
+    }
+
+    @Test
+    void shouldReturn400WhenPagingOrdersWithInvalidStatus() throws Exception {
+        long suffix = System.currentTimeMillis();
+        String username = "order_page_invalid_status_user_" + suffix;
+        String token = registerAndLogin(username);
+
+        mockMvc.perform(withToken(get("/orders/page")
+                        .param("page", "1")
+                        .param("size", "10")
+                        .param("status", "INVALID_STATUS"), token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("invalid order status"));
+    }
+
+    @Test
+    void shouldCancelTimeoutPendingOrdersAndRestoreStock() {
+        long suffix = System.currentTimeMillis();
+        Long userId = insertUser("timeout_user_" + suffix);
+        Long categoryId = insertCategory("timeout-category-" + suffix, 1);
+        Long productId = insertProduct(categoryId, "timeout-product-" + suffix, new BigDecimal("25.00"), 10, "ON_SALE");
+
+        Long timeoutPendingOrderId = insertOrder(userId, "TIMEOUT-P-" + suffix, "PENDING_PAYMENT", new BigDecimal("50.00"), 2);
+        Long timeoutPendingOrderItemId = insertOrderItem(
+                timeoutPendingOrderId,
+                productId,
+                "timeout-product-" + suffix,
+                new BigDecimal("25.00"),
+                2,
+                new BigDecimal("50.00")
+        );
+        Long timeoutPaidOrderId = insertOrder(userId, "TIMEOUT-D-" + suffix, "PAID", new BigDecimal("25.00"), 1);
+        Long recentPendingOrderId = insertOrder(userId, "TIMEOUT-R-" + suffix, "PENDING_PAYMENT", new BigDecimal("25.00"), 1);
+
+        orderIds.add(timeoutPendingOrderId);
+        orderIds.add(timeoutPaidOrderId);
+        orderIds.add(recentPendingOrderId);
+        orderItemIds.add(timeoutPendingOrderItemId);
+
+        jdbcTemplate.update("update orders set created_at = ?, updated_at = ? where id = ?",
+                "2026-01-01 10:00:00", "2026-01-01 10:00:00", timeoutPendingOrderId);
+        jdbcTemplate.update("update orders set created_at = ?, updated_at = ? where id = ?",
+                "2026-01-01 10:00:00", "2026-01-01 10:00:00", timeoutPaidOrderId);
+        jdbcTemplate.update("update orders set created_at = ?, updated_at = ? where id = ?",
+                "2036-01-01 10:00:00", "2036-01-01 10:00:00", recentPendingOrderId);
+
+        int canceledCount = orderService.cancelTimeoutOrders(LocalDateTime.of(2026, 1, 1, 10, 30));
+
+        String timeoutPendingStatus = jdbcTemplate.queryForObject(
+                "select status from orders where id = ?",
+                String.class,
+                timeoutPendingOrderId
+        );
+        String timeoutPaidStatus = jdbcTemplate.queryForObject(
+                "select status from orders where id = ?",
+                String.class,
+                timeoutPaidOrderId
+        );
+        String recentPendingStatus = jdbcTemplate.queryForObject(
+                "select status from orders where id = ?",
+                String.class,
+                recentPendingOrderId
+        );
+        Integer restoredStock = jdbcTemplate.queryForObject(
+                "select stock from products where id = ?",
+                Integer.class,
+                productId
+        );
+
+        org.junit.jupiter.api.Assertions.assertEquals(1, canceledCount);
+        org.junit.jupiter.api.Assertions.assertEquals("CANCELED", timeoutPendingStatus);
+        org.junit.jupiter.api.Assertions.assertEquals("PAID", timeoutPaidStatus);
+        org.junit.jupiter.api.Assertions.assertEquals("PENDING_PAYMENT", recentPendingStatus);
+        org.junit.jupiter.api.Assertions.assertEquals(12, restoredStock);
+    }
+
+    @Test
+    void shouldCompletePaidOrder() throws Exception {
+        long suffix = System.currentTimeMillis();
+        String username = "order_complete_user_" + suffix;
+        String token = registerAndLogin(username);
+        Long userId = findUserIdByUsername(username);
+
+        Long orderId = insertOrder(userId, "COMP-" + suffix, new BigDecimal("88.00"), 2);
+        jdbcTemplate.update("update orders set status = 'PAID' where id = ?", orderId);
+        orderIds.add(orderId);
+
+        mockMvc.perform(withToken(put("/orders/" + orderId + "/complete"), token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.id").value(orderId))
+                .andExpect(jsonPath("$.data.status").value("COMPLETED"));
+
+        String statusValue = jdbcTemplate.queryForObject(
+                "select status from orders where id = ?",
+                String.class,
+                orderId
+        );
+        org.junit.jupiter.api.Assertions.assertEquals("COMPLETED", statusValue);
+    }
+
+    @Test
+    void shouldReturn404WhenCompletingOtherUsersOrder() throws Exception {
+        long suffix = System.currentTimeMillis();
+        String ownerUsername = "order_complete_owner_" + suffix;
+        String otherUsername = "order_complete_other_" + suffix;
+        registerAndLogin(ownerUsername);
+        String otherToken = registerAndLogin(otherUsername);
+
+        Long ownerUserId = findUserIdByUsername(ownerUsername);
+        Long orderId = insertOrder(ownerUserId, "CO-" + suffix, new BigDecimal("66.00"), 1);
+        jdbcTemplate.update("update orders set status = 'PAID' where id = ?", orderId);
+        orderIds.add(orderId);
+
+        mockMvc.perform(withToken(put("/orders/" + orderId + "/complete"), otherToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(404))
+                .andExpect(jsonPath("$.message").value("order not found"));
+    }
+
+    @Test
+    void shouldReturn400WhenCompletingPendingPaymentOrder() throws Exception {
+        long suffix = System.currentTimeMillis();
+        String username = "order_complete_pending_user_" + suffix;
+        String token = registerAndLogin(username);
+        Long userId = findUserIdByUsername(username);
+
+        Long orderId = insertOrder(userId, "CP-" + suffix, new BigDecimal("55.00"), 1);
+        orderIds.add(orderId);
+
+        mockMvc.perform(withToken(put("/orders/" + orderId + "/complete"), token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("order cannot be completed"));
+    }
+
+    @Test
+    void shouldReturn400WhenCompletingCanceledOrder() throws Exception {
+        long suffix = System.currentTimeMillis();
+        String username = "order_complete_canceled_user_" + suffix;
+        String token = registerAndLogin(username);
+        Long userId = findUserIdByUsername(username);
+
+        Long orderId = insertOrder(userId, "CC-" + suffix, new BigDecimal("44.00"), 1);
+        jdbcTemplate.update("update orders set status = 'CANCELED' where id = ?", orderId);
+        orderIds.add(orderId);
+
+        mockMvc.perform(withToken(put("/orders/" + orderId + "/complete"), token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("order cannot be completed"));
+    }
+
+    @Test
+    void shouldReturn400WhenCompletingCompletedOrderAgain() throws Exception {
+        long suffix = System.currentTimeMillis();
+        String username = "order_complete_again_user_" + suffix;
+        String token = registerAndLogin(username);
+        Long userId = findUserIdByUsername(username);
+
+        Long orderId = insertOrder(userId, "CA-" + suffix, new BigDecimal("77.00"), 1);
+        jdbcTemplate.update("update orders set status = 'COMPLETED' where id = ?", orderId);
+        orderIds.add(orderId);
+
+        mockMvc.perform(withToken(put("/orders/" + orderId + "/complete"), token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("order cannot be completed"));
+    }
+
+    @Test
+    void shouldFallbackToDefaultSortWhenPagingOrdersWithInvalidSortAndOrder() throws Exception {
+        long suffix = System.currentTimeMillis();
+        String username = "order_page_invalid_sort_user_" + suffix;
+        String token = registerAndLogin(username);
+        Long userId = findUserIdByUsername(username);
+
+        Long firstOrderId = insertOrder(userId, "IS-1-" + suffix, new BigDecimal("10.00"), 1);
+        Long secondOrderId = insertOrder(userId, "IS-2-" + suffix, new BigDecimal("20.00"), 2);
+
+        jdbcTemplate.update("update orders set created_at = ?, updated_at = ? where id = ?",
+                "2037-01-01 10:01:00", "2037-01-01 10:01:00", firstOrderId);
+        jdbcTemplate.update("update orders set created_at = ?, updated_at = ? where id = ?",
+                "2037-01-01 10:02:00", "2037-01-01 10:02:00", secondOrderId);
+
+        mockMvc.perform(withToken(get("/orders/page")
+                        .param("page", "1")
+                        .param("size", "2")
+                        .param("sort", "INVALID_SORT")
+                        .param("order", "INVALID_ORDER"), token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.list.length()").value(2))
+                .andExpect(jsonPath("$.data.list[0].id").value(secondOrderId))
+                .andExpect(jsonPath("$.data.list[1].id").value(firstOrderId));
 
         orderIds.add(firstOrderId);
         orderIds.add(secondOrderId);
@@ -492,6 +811,27 @@ public class OrderControllerTest {
                 Long.class,
                 username
         );
+    }
+
+    private Long insertUser(String username) {
+        KeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbcTemplate.update(
+                connection -> {
+                    PreparedStatement ps = connection.prepareStatement(
+                            "insert into users(username, password, name, age) values (?, ?, ?, ?)",
+                            Statement.RETURN_GENERATED_KEYS
+                    );
+                    ps.setString(1, username);
+                    ps.setString(2, "123456");
+                    ps.setString(3, "timeout user");
+                    ps.setInt(4, 20);
+                    return ps;
+                },
+                keyHolder
+        );
+        Long userId = keyHolder.getKey().longValue();
+        userIds.add(userId);
+        return userId;
     }
 
     private Long insertCategory(String name, int sort) {

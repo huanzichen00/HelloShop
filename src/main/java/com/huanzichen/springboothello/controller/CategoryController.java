@@ -1,10 +1,11 @@
 package com.huanzichen.springboothello.controller;
 
 import com.huanzichen.springboothello.common.Result;
+import com.huanzichen.springboothello.dto.category.CategoryCreateDTO;
 import com.huanzichen.springboothello.model.Category;
 import com.huanzichen.springboothello.service.CategoryService;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RestController;
+import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
@@ -20,5 +21,16 @@ public class CategoryController {
     @GetMapping("/categories")
     public Result<List<Category>> listCategories() {
         return Result.success(categoryService.listCategories());
+    }
+
+    @PostMapping("/categories")
+    public Result<Category> createCategory(@RequestBody @Valid CategoryCreateDTO categoryCreateDTO) {
+        return Result.success(categoryService.createCategory(categoryCreateDTO));
+    }
+
+    @DeleteMapping("/categories/{id:\\d+}")
+    public Result<Void> deleteCategory(@PathVariable Long id) {
+        categoryService.deleteCategory(id);
+        return Result.success();
     }
 }

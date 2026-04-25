@@ -1,6 +1,7 @@
 package com.huanzichen.springboothello.service;
 
 import com.huanzichen.springboothello.common.ErrorCode;
+import com.huanzichen.springboothello.common.PageResult;
 import com.huanzichen.springboothello.common.UserContext;
 import com.huanzichen.springboothello.dto.order.OrderCreateDTO;
 import com.huanzichen.springboothello.dto.order.OrderCreatedMessage;
@@ -19,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -36,14 +38,16 @@ public class OrderService {
     private final OrderItemMapper orderItemMapper;
     private final StringRedisTemplate stringRedisTemplate;
     private final OrderMessageProducer orderMessageProducer;
+    private final NotificationService notificationService;
 
-    public OrderService(CartItemMapper cartItemMapper, OrderMapper orderMapper, ProductMapper productMapper, OrderItemMapper orderItemMapper, StringRedisTemplate stringRedisTemplate, OrderMessageProducer orderMessageProducer) {
+    public OrderService(CartItemMapper cartItemMapper, OrderMapper orderMapper, ProductMapper productMapper, OrderItemMapper orderItemMapper, StringRedisTemplate stringRedisTemplate, OrderMessageProducer orderMessageProducer, NotificationService notificationService) {
         this.cartItemMapper = cartItemMapper;
         this.orderMapper = orderMapper;
         this.productMapper = productMapper;
         this.orderItemMapper = orderItemMapper;
         this.stringRedisTemplate = stringRedisTemplate;
         this.orderMessageProducer = orderMessageProducer;
+        this.notificationService = notificationService;
     }
 
     @Transactional
@@ -127,6 +131,25 @@ public class OrderService {
         return orderMapper.findByUserId(userId);
     }
 
+    public PageResult<Order> listMyOrdersByPage(Integer page,
+                                                Integer size,
+                                                String status,
+                                                String sort,
+                                                String order) {
+        validateStatus(status);
+        validatePageParams(page, size);
+        sort = normalizeSort(sort);
+        order = normalizeOrder(order);
+        Long userId = UserContext.getCurrentUserId();
+        int offset = (page - 1) * size;
+
+        List<Order> orders = orderMapper.findByUserIdPage(userId, status, offset, size, sort, order);
+        Long total = orderMapper.countByUserId(userId, status);
+
+        int totalPages = (int) ((total + size - 1) / size);
+        return new PageResult<>(total, orders, page, size, totalPages);
+    }
+
     public Order getOrderDetail(Long id) {
         Long userId = UserContext.getCurrentUserId();
         Order order = orderMapper.findByIdAndUserId(id, userId);
@@ -175,6 +198,49 @@ public class OrderService {
         return paidOrder;
     }
 
+    @Transactional
+    public Order completeOrder(Long id) {
+        Long userId = UserContext.getCurrentUserId();
+
+        Order order = orderMapper.findByIdAndUserId(id, userId);
+        validateCompletableOrder(order);
+
+        int rows = orderMapper.updateStatusById(id, "COMPLETED");
+        if (rows == 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "failed to complete order");
+        }
+
+        Order completedOrder = orderMapper.findByIdAndUserId(id, userId);
+        completedOrder.setItems(orderItemMapper.findByOrderId(id));
+        return completedOrder;
+    }
+
+    @Transactional
+    public int cancelTimeoutOrders(LocalDateTime deadline) {
+        List<Order> timeoutOrders = orderMapper.findTimeoutPendingOrders(deadline);
+        int canceledCount = 0;
+        for (Order order : timeoutOrders) {
+            List<OrderItem> orderItems = orderItemMapper.findByOrderId(order.getId());
+
+            int rows = orderMapper.updateStatusByIdAndCurrentStatus(
+                    order.getId(),
+                    "PENDING_PAYMENT",
+                    "CANCELED"
+            );
+            if (rows > 0) {
+                restoreStock(orderItems);
+
+                notificationService.createOrderTimeoutCanceledNotification(
+                        order.getUserId(),
+                        order.getId(),
+                        order.getOrderNo()
+                );
+                canceledCount++;
+            }
+        }
+        return canceledCount;
+    }
+
     private static void validateCancelableOrder(Order order) {
         if (order == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "order not found");
@@ -189,8 +255,58 @@ public class OrderService {
             throw new BusinessException(ErrorCode.NOT_FOUND, "order not found");
         }
         if (!"PENDING_PAYMENT".equals(order.getStatus())) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, "order cannot be payed");
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "order cannot be paid");
         }
+    }
+
+    private static void validatePageParams(Integer page, Integer size) {
+        if (page == null || page <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "page must be greater than zero");
+        }
+        if (size == null || size <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "size must be greater than zero");
+        }
+    }
+
+    private void validateStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return;
+        }
+        if (!"PENDING_PAYMENT".equals(status)
+                && !"PAID".equals(status)
+                && !"CANCELED".equals(status)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "invalid order status");
+        }
+    }
+
+    private void validateCompletableOrder(Order order) {
+        if (order == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "order not found");
+        }
+        if (!"PAID".equals(order.getStatus())) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "order cannot be completed");
+        }
+    }
+
+    private String normalizeSort(String sort) {
+        if (sort == null || sort.isBlank()) {
+            return "createdAt";
+        }
+        if (!"createdAt".equals(sort) && !"totalAmount".equals(sort)) {
+            return "createdAt";
+        }
+        return sort;
+    }
+
+    private String normalizeOrder(String order) {
+        if (order == null || order.isBlank()) {
+            return "desc";
+        }
+        order = order.toLowerCase();
+        if (!"asc".equals(order) && !"desc".equals(order)) {
+            return "desc";
+        }
+        return order;
     }
 
     private List<CartItem> getOwnedCartItems(Long userId, List<Long> cartItemIds) {
